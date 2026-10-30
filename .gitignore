@@ -6,3 +6,5 @@ user_data/logs/
 user_data/*.sqlite*
 reports/
 docs/
+user_data/strategies/Rules20.py
+tests/test_rules20.py
