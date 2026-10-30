@@ -13,19 +13,27 @@ import sys
 import threading
 import time
 from collections import Counter
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import ccxt
 import ccxt.async_support
 
-COUNT_FILE = os.environ.get(
-    "PHASE0_REQCOUNT_FILE", "/Volumes/jiaoyi/freqtrade/user_data/phase0_reqcount.jsonl"
-)
+DATA = Path(__file__).resolve().parent.parent / "data"
+COUNT_FILE = DATA / "ft_reqcount.jsonl"
+LIVE_WEIGHT_FILE = DATA / "ip_weight_now.json"
+LIMITED_FILE = DATA / "ft_limited.json"
 
 _lock = threading.Lock()
 _calls: Counter = Counter()
 _weight: Counter = Counter()
 _hdr_max: dict = {}
+
+
+def _write_atomic(path: Path, payload: dict) -> None:
+    tmp = path.with_name(f".{path.name}.{threading.get_ident()}.tmp")
+    tmp.write_text(json.dumps(payload))
+    os.replace(tmp, path)
 
 
 def _klines_weight(limit: int) -> int:
@@ -80,6 +88,14 @@ def _record(self, url: str, method: str) -> None:
         _weight[key] += w
         if used is not None:
             _hdr_max[parsed.netloc] = max(_hdr_max.get(parsed.netloc, 0), used)
+    if used is not None and parsed.netloc == "fapi.binance.com":
+        _write_atomic(LIVE_WEIGHT_FILE, {"used": used, "ts": time.time()})
+
+
+def _record_limit(url: str, error: BaseException) -> None:
+    """Freqtrade neither honours nor writes the 2.0 ban file, so its 418/429 must reach the guard."""
+    if isinstance(error, ccxt.DDoSProtection):
+        _write_atomic(LIMITED_FILE, {"url": url, "error": str(error)[:300], "ts": time.time()})
 
 
 _sync_fetch = ccxt.Exchange.fetch
@@ -89,6 +105,9 @@ _async_fetch = ccxt.async_support.Exchange.fetch
 def _counted_sync_fetch(self, url, method="GET", headers=None, body=None):
     try:
         return _sync_fetch(self, url, method, headers, body)
+    except Exception as e:
+        _record_limit(url, e)
+        raise
     finally:
         _record(self, url, method)
 
@@ -96,6 +115,9 @@ def _counted_sync_fetch(self, url, method="GET", headers=None, body=None):
 async def _counted_async_fetch(self, url, method="GET", headers=None, body=None):
     try:
         return await _async_fetch(self, url, method, headers, body)
+    except Exception as e:
+        _record_limit(url, e)
+        raise
     finally:
         _record(self, url, method)
 
@@ -124,7 +146,7 @@ def _flush_forever() -> None:
             fh.write(json.dumps(row) + "\n")
 
 
-threading.Thread(target=_flush_forever, name="phase0-reqcount", daemon=True).start()
+threading.Thread(target=_flush_forever, name="ft-reqcount", daemon=True).start()
 
 if __name__ == "__main__":
     from freqtrade.main import main

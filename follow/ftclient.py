@@ -6,8 +6,8 @@ from pathlib import Path
 
 import requests
 
-DEFAULT_BASE_URL = "http://127.0.0.1:8080/api/v1/"
-DEFAULT_SECRETS = "/Volumes/jiaoyi/freqtrade/secrets/api.json"
+DEFAULT_BASE_URL = "http://127.0.0.1:8081/api/v1/"
+DEFAULT_SECRETS = str(Path(__file__).resolve().parent.parent / "data" / "api.json")
 
 
 class FtApiError(Exception):
@@ -73,3 +73,16 @@ class FtClient:
 
     def reload_config(self) -> dict:
         return self._call("POST", "reload_config")
+
+    def force_enter(self, pair: str, side: str, stake: float, leverage: float, tag: str) -> dict:
+        """`stake` is margin, not notional. Refusals come back as FtApiError or a dict with no trade_id."""
+        return self._call("POST", "forceenter", body={
+            "pair": pair, "side": side, "stakeamount": stake, "leverage": leverage,
+            "ordertype": "market", "entry_tag": tag,
+        })
+
+    def force_exit(self, trade_id: int) -> dict:
+        return self._call("POST", "forceexit", body={"tradeid": trade_id, "ordertype": "market"})
+
+    def trade(self, trade_id: int) -> dict:
+        return self._call("GET", f"trade/{trade_id}")
