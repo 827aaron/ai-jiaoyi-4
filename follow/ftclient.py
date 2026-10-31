@@ -6,7 +6,7 @@ from pathlib import Path
 
 import requests
 
-DEFAULT_BASE_URL = "http://127.0.0.1:8081/api/v1/"
+DEFAULT_BASE_URL = "http://127.0.0.1:8082/api/v1/"
 DEFAULT_SECRETS = str(Path(__file__).resolve().parent.parent / "data" / "api.json")
 
 
