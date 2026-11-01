@@ -1,6 +1,6 @@
 """Decide whether Freqtrade may run. Pure logic; run.py owns the process.
 
-A 2.0 ban or a heavy minute pauses Freqtrade and it comes back by itself. A 418/429 received by
+A ban on the shared IP or a heavy minute pauses Freqtrade and it comes back by itself. A 418/429 received by
 Freqtrade itself is ours to answer for, so that one halts until a person clears it.
 """
 
@@ -58,7 +58,7 @@ class Guard:
         until = self._ban_until(t)
         if until:
             self.resume_at = max(self.resume_at, until + BAN_MARGIN_S)
-            return f"2.0 ban until {until:.0f}"
+            return f"ban until {until:.0f}"
         used = self._weight_now(t)
         if used > WEIGHT_STOP:
             self.resume_at = max(self.resume_at, t + WEIGHT_PAUSE_S)
