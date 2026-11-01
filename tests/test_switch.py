@@ -2,6 +2,7 @@
 
 import json
 import os
+import sqlite3
 import stat
 import subprocess
 import time
@@ -161,3 +162,65 @@ def test_rollback_ToTwo_RefusesActiveBan(world):
     done = run(world, "rollback_to_2.sh", "--execute")
     assert done.returncode == 1 and "ban" in done.stderr
     assert not (world["fake"] / "jobs/com.jiaoyi.run").exists()
+
+
+@pytest.fixture
+def full(world: dict) -> dict:
+    data = world["four"] / "brain/data"
+    con = sqlite3.connect(data / "freqtrade_rules20.sqlite")
+    con.execute("create table trades (id integer, is_open integer)")
+    con.execute("insert into trades values (1, 0)")
+    con.commit()
+    con.close()
+    (data / "ft_meta.json").write_text("{}")
+    (data / "meeting_live").mkdir()
+    (world["four"] / "brain/config/freqtrade.rules20.json").write_text(
+        '{"dry_run": true,\n  "dry_run_wallet": 10000,\n  "max_open_trades": 8}'
+    )
+    return world
+
+
+def wallet(world: dict) -> str:
+    return (world["four"] / "brain/config/freqtrade.rules20.json").read_text()
+
+
+def test_reset_ledger_DryRunChangesNothing(full):
+    assert run(full, "reset_ledger.sh", "5000").returncode == 0
+    assert '"dry_run_wallet": 10000' in wallet(full)
+    assert (full["four"] / "brain/data/freqtrade_rules20.sqlite").exists()
+
+
+def test_reset_ledger_ArchivesAndSetsTheWallet(full):
+    done = run(full, "reset_ledger.sh", "5000", "--execute")
+    assert done.returncode == 0, done.stderr
+    data = full["four"] / "brain/data"
+    archives = list(data.glob("archive-*"))
+    assert len(archives) == 1
+    assert (archives[0] / "freqtrade_rules20.sqlite").exists()
+    assert (archives[0] / "risk_state.json").read_text() == '{"from": "4.0"}'
+    assert '"dry_run_wallet": 10000' in (archives[0] / "freqtrade.rules20.json").read_text()
+    assert not (data / "freqtrade_rules20.sqlite").exists()
+    assert not (data / "ft_meta.json").exists()
+    assert '"dry_run_wallet": 5000' in wallet(full)
+    assert (full["four"] / "data/planned_restart").exists()
+    assert (full["fake"] / "jobs/com.jiaoyi4.brain").exists()
+
+
+def test_reset_ledger_RefusesOpenTrade(full):
+    con = sqlite3.connect(full["four"] / "brain/data/freqtrade_rules20.sqlite")
+    con.execute("insert into trades values (2, 1)")
+    con.commit()
+    con.close()
+    done = run(full, "reset_ledger.sh", "5000", "--execute")
+    assert done.returncode == 1 and "open trades" in done.stderr
+    assert not [c for c in calls(full) if c.startswith("bootout")]
+
+
+def test_reset_ledger_RefusesARunningMeeting(full):
+    (full["four"] / "brain/data/meeting_live/BTCUSDT.json").write_text('{"status": "running"}')
+    done = run(full, "reset_ledger.sh", "5000", "--execute")
+    assert done.returncode == 1 and "meeting" in done.stderr
+
+
+def test_reset_ledger_RefusesBadWallet(full):
+    assert run(full, "reset_ledger.sh", "abc", "--execute").returncode == 1
