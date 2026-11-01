@@ -21,9 +21,14 @@ class Guard:
     ban_file: Path
     weight_file: Path
     limited_file: Path
+    restarts_file: Path | None = None
     resume_at: float = 0.0
     halted: str | None = None
     restarts: dict[str, int] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.restarts_file and self.restarts_file.exists():
+            self.restarts = json.loads(self.restarts_file.read_text())
 
     def _ban_until(self, now: float) -> float:
         try:
@@ -67,6 +72,8 @@ class Guard:
         t = time.time() if now is None else now
         day = datetime.fromtimestamp(t, UTC).date().isoformat()
         self.restarts[day] = self.restarts.get(day, 0) + 1
+        if self.restarts_file:  # launchd restarts this process, the cap must outlive it
+            self.restarts_file.write_text(json.dumps(self.restarts))
         if self.restarts[day] > MAX_RESTARTS_PER_DAY:
             self.halted = f"more than {MAX_RESTARTS_PER_DAY} restarts on {day}"
             return False

@@ -168,6 +168,14 @@ def test_guard_allow_restart_halts_past_the_daily_cap(guard):
     assert guard.halted
 
 
+def test_guard_allow_restart_keeps_the_cap_across_a_process_restart(tmp_path):
+    def make():
+        return Guard(tmp_path / "b", tmp_path / "w", tmp_path / "l", tmp_path / "restarts.json")
+    for _ in range(MAX_RESTARTS_PER_DAY):
+        assert make().allow_restart(1000.0)
+    assert make().allow_restart(1000.0) is False
+
+
 @pytest.mark.parametrize("side,leg,ft,expected", [
     ("long", "entry", 101.0, 100.0),
     ("long", "exit", 99.0, 100.0),

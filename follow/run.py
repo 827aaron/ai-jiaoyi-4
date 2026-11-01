@@ -1,7 +1,10 @@
 """Run Freqtrade dry-run, the bridge, the guard and the daily report as one process.
 
 The guard is read every second and the bridge every five. If this process dies Freqtrade keeps
-running unguarded, so Freqtrade is put in its own process group and terminated on any exit path.
+running unguarded, so Freqtrade is put in its own process group, terminated on any exit path, and
+a survivor of a hard kill is terminated at the next start.
+
+launchd restarts this on a non-zero exit only: a refusal or a halt exits 0 and stays down.
 """
 
 import json
@@ -23,6 +26,7 @@ from report import BANGKOK, DATA, POSITIONS, ROOT, write_report
 SAMPLER_DONE = DATA / "sampler_done.json"
 SAMPLER_MAX_PEAK = 2000
 API_FILE = DATA / "api.json"
+PID_FILE = DATA / "freqtrade.pid"
 EVENTS = DATA / "events.jsonl"
 BAN_FILE = POSITIONS.with_name("rest_ban.json")
 BRIDGE_EVERY_S = 5
@@ -50,9 +54,24 @@ def ensure_api_file() -> None:
         }}, fh)
 
 
+def stop_orphan() -> None:
+    if not PID_FILE.exists():
+        return
+    pid = int(PID_FILE.read_text())
+    seen = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True)
+    if "ft_counted.py" not in seen.stdout:  # the pid was reused or Freqtrade is already gone
+        return
+    os.killpg(pid, signal.SIGTERM)
+    for _ in range(20):
+        if subprocess.run(["ps", "-p", str(pid)], capture_output=True).returncode:
+            break
+        time.sleep(1)
+    event("orphan_stopped", pid=pid)
+
+
 def start_freqtrade() -> subprocess.Popen:
     log_file = (DATA / "freqtrade.log").open("a")
-    return subprocess.Popen(
+    proc = subprocess.Popen(
         [
             str(ROOT / ".venv/bin/python"), str(ROOT / "follow/ft_counted.py"), "trade",
             "--config", str(ROOT / "config/freqtrade.json"), "--config", str(API_FILE),
@@ -60,6 +79,8 @@ def start_freqtrade() -> subprocess.Popen:
         ],
         cwd=ROOT, stdout=log_file, stderr=subprocess.STDOUT, start_new_session=True,
     )
+    PID_FILE.write_text(str(proc.pid))
+    return proc
 
 
 def stop_freqtrade(proc: subprocess.Popen | None) -> None:
@@ -87,12 +108,15 @@ def main() -> int:
     )
     if not sampler_passed():
         print("refused: the 24-hour weight sample has not passed", file=sys.stderr)
-        return 2
+        return 0
     ensure_api_file()
     client = FtClient.from_secrets(str(API_FILE))
     bridge = Bridge(client, POSITIONS, DATA / "bridge_state.json")
-    guard = Guard(BAN_FILE, DATA / "ip_weight_now.json", DATA / "ft_limited.json")
+    guard = Guard(
+        BAN_FILE, DATA / "ip_weight_now.json", DATA / "ft_limited.json", DATA / "restarts.json",
+    )
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    stop_orphan()
     proc: subprocess.Popen | None = None
     reported = datetime.now(BANGKOK).date() - timedelta(days=1)
     last_bridge = 0.0
@@ -114,10 +138,10 @@ def main() -> int:
                     last_bridge = now + 30  # the API needs a while after startup
                 else:
                     event("halted", reason=guard.halted)
-                    return 1
+                    return 0
             if guard.halted:
                 event("halted", reason=guard.halted)
-                return 1
+                return 0
             if running and now - last_bridge >= BRIDGE_EVERY_S:
                 last_bridge = now
                 try:
@@ -130,7 +154,6 @@ def main() -> int:
             if reported < yesterday and local.hour * 60 + local.minute >= REPORT_AFTER_MIN:
                 event("report", path=str(write_report(yesterday)))
                 reported = yesterday
-            time.sleep(1)
     finally:
         stop_freqtrade(proc)
 
