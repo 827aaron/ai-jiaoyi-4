@@ -154,6 +154,7 @@ def main() -> int:
             if reported < yesterday and local.hour * 60 + local.minute >= REPORT_AFTER_MIN:
                 event("report", path=str(write_report(yesterday)))
                 reported = yesterday
+            time.sleep(1)
     finally:
         stop_freqtrade(proc)
 
