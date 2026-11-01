@@ -11,3 +11,4 @@ tests/test_rules20.py
 user_data/strategies/Replay20.py
 user_data/backtest_results/
 brain/
+replay/ticks.py
